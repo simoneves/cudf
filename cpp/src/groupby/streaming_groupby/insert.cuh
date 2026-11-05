@@ -39,7 +39,7 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
   table_view const& batch_keys, cuda::stream_ref stream)
 {
   auto const batch_size = batch_keys.num_rows();
-  auto const temp_mr    = cudf::get_current_device_resource_ref();
+  auto const temp_mr    = resource();
   auto const has_null   = cudf::nullate::DYNAMIC{_has_nullable_keys};
 
   // Preprocess batch for row operators.
@@ -51,9 +51,9 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
   auto const skip_rows_with_nulls = _has_nullable_keys && _null_handling == null_policy::EXCLUDE;
   auto [bitmask_buffer, batch_bitmask] =
     skip_rows_with_nulls
-      ? detail::compute_row_bitmask(batch_keys, stream)
+      ? detail::compute_row_bitmask(batch_keys, stream, temp_mr)
       : std::pair<cuda::device_buffer<std::byte>, bitmask_type const*>{
-          cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream), nullptr};
+          cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, temp_mr), nullptr};
 
   // Precompute batch hash values.  Caching is faster than inlining the row hasher
   cuda::device_buffer<hash_value_type> batch_hash_cache(stream, temp_mr, batch_size, cuda::no_init);
