@@ -52,7 +52,7 @@ size_type streaming_groupby::impl::probe_and_insert_first_batch(
   size_type* batch_local_indices,
   cuda::stream_ref stream)
 {
-  auto const temp_mr        = cudf::get_current_device_resource_ref();
+  auto const temp_mr        = resource();
   auto const batch_self_cmp = cudf::detail::row::equality::self_comparator{preprocessed_batch};
   auto batch_self_eq        = batch_self_cmp.equal_to<has_nested>(has_null, null_equality::EQUAL);
 

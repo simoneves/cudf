@@ -27,6 +27,7 @@
 #include <cuda/stream>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -249,7 +250,8 @@ auto build_cross_comparators(
   std::vector<std::shared_ptr<cudf::detail::row::equality::preprocessed_table>> const&
     preprocessed_batches,
   cudf::nullate::DYNAMIC has_null,
-  cuda::stream_ref stream)
+  cuda::stream_ref stream,
+  rmm::device_async_resource_ref temp_mr)
 {
   using eq_t = cudf::detail::row::equality::device_row_comparator<
     has_nested_columns,
@@ -257,7 +259,6 @@ auto build_cross_comparators(
     cudf::detail::row::equality::nan_equal_physical_equality_comparator>;
 
   auto const n       = static_cast<size_type>(preprocessed_batches.size());
-  auto const temp_mr = cudf::get_current_device_resource_ref();
 
   std::vector<eq_t> h_eqs;
   h_eqs.reserve(n);
@@ -333,13 +334,18 @@ struct streaming_groupby::impl {
    * built once and reused on every aggregate() / merge() call rather than rebuilt
    * (which requires a host-to-device copy of the column metadata).
    */
-  std::unique_ptr<mutable_table_device_view, void (*)(mutable_table_device_view*)> _d_agg_results;
+  std::unique_ptr<mutable_table_device_view, std::function<void(mutable_table_device_view*)>>
+    _d_agg_results;
   std::vector<size_type> _value_col_indices;
   std::unique_ptr<rmm::device_uvector<aggregation::Kind>> _d_agg_kinds;
 
   std::unique_ptr<streaming_set_t> _key_set;
 
   [[nodiscard]] size_type num_keys() const { return static_cast<size_type>(_key_indices.size()); }
+  [[nodiscard]] rmm::device_async_resource_ref resource()
+  {
+    return rmm::device_async_resource_ref{_mr};
+  }
   void ensure_not_invalidated() const
   {
     CUDF_EXPECTS(!_invalidated.load(std::memory_order_relaxed),

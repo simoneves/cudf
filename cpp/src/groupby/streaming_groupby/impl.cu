@@ -106,7 +106,7 @@ streaming_groupby::impl::impl(host_span<size_type const> key_indices,
 
 void streaming_groupby::impl::initialize(table_view const& data, cuda::stream_ref stream)
 {
-  auto const mr = cudf::get_current_device_resource_ref();
+  auto const mr = resource();
 
   // Detect nested key columns (struct, list) for comparator template dispatch.
   std::vector<column_view> key_cols;
@@ -164,9 +164,7 @@ void streaming_groupby::impl::initialize(table_view const& data, cuda::stream_re
   // never reallocated, so the device-side descriptor stays valid for the whole
   // lifetime of this impl.
   {
-    auto raii = mutable_table_device_view::create(*_agg_results, stream);
-    _d_agg_results =
-      decltype(_d_agg_results){raii.release(), +[](mutable_table_device_view* t) { t->destroy(); }};
+    _d_agg_results = mutable_table_device_view::create(*_agg_results, stream, mr);
   }
 
   _d_agg_kinds = std::make_unique<rmm::device_uvector<aggregation::Kind>>(

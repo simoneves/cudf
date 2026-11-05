@@ -29,7 +29,7 @@ size_type streaming_groupby::impl::probe_and_insert_subsequent(
   size_type* batch_local_indices,
   cuda::stream_ref stream)
 {
-  auto const temp_mr        = cudf::get_current_device_resource_ref();
+  auto const temp_mr        = resource();
   auto const batch_self_cmp = cudf::detail::row::equality::self_comparator{preprocessed_batch};
   auto const batch_self_eq  = batch_self_cmp.equal_to<has_nested>(has_null, null_equality::EQUAL);
   auto const hasher         = offset_cache_hasher{batch_hash_cache, _max_distinct_keys};
@@ -37,7 +37,7 @@ size_type streaming_groupby::impl::probe_and_insert_subsequent(
   auto* const base          = _key_set->data();
 
   auto d_cross_eqs = build_cross_comparators<has_nested>(
-    preprocessed_batch, _preprocessed_batches, has_null, stream);
+    preprocessed_batch, _preprocessed_batches, has_null, stream, temp_mr);
   auto const comparator =
     n_table_comparator{batch_self_eq, d_cross_eqs.data(), _key_loc->data(), _max_distinct_keys};
 

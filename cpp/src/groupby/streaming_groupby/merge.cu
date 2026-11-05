@@ -117,7 +117,7 @@ void streaming_groupby::impl::do_merge(impl const& other, cuda::stream_ref strea
                "Cannot merge streaming_groupby objects with different null handling policies.",
                std::invalid_argument);
 
-  auto const mr = cudf::get_current_device_resource_ref();
+  auto const mr = resource();
 
   auto other_keys           = other.gather_distinct_keys(stream, mr);
   auto const other_key_view = other_keys->view();
@@ -134,7 +134,7 @@ void streaming_groupby::impl::do_merge(impl const& other, cuda::stream_ref strea
   // `other._agg_results`; no need to deep-copy the source rows like keys.
   auto const other_aggs_view =
     cudf::detail::slice(other._agg_results->view(), {0, other_distinct_keys}, stream).front();
-  auto const d_source = table_device_view::create(other_aggs_view, stream);
+  auto const d_source = table_device_view::create(other_aggs_view, stream, mr);
 
   auto const num_agg_cols = static_cast<int64_t>(_agg_kinds.size());
   thrust::for_each_n(

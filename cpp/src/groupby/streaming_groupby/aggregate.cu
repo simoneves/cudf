@@ -64,9 +64,9 @@ void streaming_groupby::impl::do_aggregate(table_view const& data, cuda::stream_
   }();
 
   auto const values_view = data.select(_value_col_indices);
-  auto const d_values    = table_device_view::create(values_view, stream);
+  auto const d_values    = table_device_view::create(values_view, stream, resource());
 
-  auto const temp_mr      = cudf::get_current_device_resource_ref();
+  auto const temp_mr      = resource();
   auto const num_agg_cols = static_cast<int64_t>(_agg_kinds.size());
   thrust::for_each_n(
     rmm::exec_policy_nosync(stream, temp_mr),
