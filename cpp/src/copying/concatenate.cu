@@ -57,14 +57,16 @@ constexpr bool use_fused_kernel_heuristic(bool const has_nulls, size_t const num
   return has_nulls || num_columns > 4;
 }
 
-auto create_device_views(host_span<column_view const> views, cuda::stream_ref stream)
+auto create_device_views(host_span<column_view const> views,
+                         cuda::stream_ref stream,
+                         rmm::device_async_resource_ref mr)
 {
   // Create device views for each input view
   using CDViewPtr         = decltype(column_device_view::create(std::declval<column_view>(),
                                                         std::declval<cuda::stream_ref>()));
   auto device_view_owners = std::vector<CDViewPtr>(views.size());
-  std::transform(views.begin(), views.end(), device_view_owners.begin(), [stream](auto const& col) {
-    return column_device_view::create(col, stream);
+  std::transform(views.begin(), views.end(), device_view_owners.begin(), [stream, mr](auto const& col) {
+    return column_device_view::create(col, stream, mr);
   });
 
   // Assemble contiguous array of device views
@@ -76,7 +78,7 @@ auto create_device_views(host_span<column_view const> views, cuda::stream_ref st
                  [](auto const& col) { return *col; });
 
   auto d_views =
-    make_device_uvector_async(device_views, stream, cudf::get_current_device_resource_ref());
+    make_device_uvector_async(device_views, stream, mr);
 
   // Compute the partition offsets
   auto offsets = cudf::detail::make_pinned_vector_async<size_t>(views.size() + 1, stream);
@@ -88,7 +90,7 @@ auto create_device_views(host_span<column_view const> views, cuda::stream_ref st
     [](auto const& col) { return col.size(); },
     cuda::std::plus{});
   auto d_offsets =
-    make_device_uvector_async(offsets, stream, cudf::get_current_device_resource_ref());
+    make_device_uvector_async(offsets, stream, mr);
   auto const output_size = offsets.back();
   cudf::detail::sync_stream(stream);
 
@@ -157,8 +159,23 @@ size_type concatenate_masks(device_span<column_device_view const> d_views,
                             size_type output_size,
                             cuda::stream_ref stream)
 {
+  return concatenate_masks_with_resource(d_views,
+                                         d_offsets,
+                                         dest_mask,
+                                         output_size,
+                                         stream,
+                                         cudf::get_current_device_resource_ref());
+}
+
+size_type concatenate_masks_with_resource(device_span<column_device_view const> d_views,
+                                          device_span<size_t const> d_offsets,
+                                          bitmask_type* dest_mask,
+                                          size_type output_size,
+                                          cuda::stream_ref stream,
+                                          rmm::device_async_resource_ref mr)
+{
   cudf::detail::device_scalar<size_type> d_valid_count(
-    0, stream, cudf::get_current_device_resource_ref());
+    0, stream, mr);
   constexpr size_type block_size{256};
   cudf::detail::grid_1d config(output_size, block_size);
   concatenate_masks_kernel<block_size>
@@ -177,13 +194,22 @@ size_type concatenate_masks(host_span<column_view const> views,
                             bitmask_type* dest_mask,
                             cuda::stream_ref stream)
 {
+  return concatenate_masks_with_resource(
+    views, dest_mask, stream, cudf::get_current_device_resource_ref());
+}
+
+size_type concatenate_masks_with_resource(host_span<column_view const> views,
+                                          bitmask_type* dest_mask,
+                                          cuda::stream_ref stream,
+                                          rmm::device_async_resource_ref mr)
+{
   // Preprocess and upload inputs to device memory
-  auto const device_views = create_device_views(views, stream);
+  auto const device_views = create_device_views(views, stream, mr);
   auto const& d_views     = std::get<1>(device_views);
   auto const& d_offsets   = std::get<2>(device_views);
   auto const output_size  = std::get<3>(device_views);
 
-  return concatenate_masks(d_views, d_offsets, dest_mask, output_size, stream);
+  return concatenate_masks_with_resource(d_views, d_offsets, dest_mask, output_size, stream, mr);
 }
 
 namespace {
@@ -247,7 +273,7 @@ std::unique_ptr<column> fused_concatenate(host_span<column_view const> views,
   using mask_policy = cudf::mask_allocation_policy;
 
   // Preprocess and upload inputs to device memory
-  auto const device_views = create_device_views(views, stream);
+  auto const device_views = create_device_views(views, stream, mr);
   auto const& d_views     = std::get<1>(device_views);
   auto const& d_offsets   = std::get<2>(device_views);
   auto const output_size  = std::get<3>(device_views);
@@ -260,10 +286,9 @@ std::unique_ptr<column> fused_concatenate(host_span<column_view const> views,
   auto const policy = has_nulls ? mask_policy::ALWAYS : mask_policy::NEVER;
   auto out_col      = detail::allocate_like(views.front(), output_size, policy, stream, mr);
   auto out_view     = out_col->mutable_view();
-  auto d_out_view   = mutable_column_device_view::create(out_view, stream);
+  auto d_out_view   = mutable_column_device_view::create(out_view, stream, mr);
 
-  cudf::detail::device_scalar<size_type> d_valid_count(
-    0, stream, cudf::get_current_device_resource_ref());
+  cudf::detail::device_scalar<size_type> d_valid_count(0, stream, mr);
 
   // Launch kernel
   constexpr size_type block_size{256};
@@ -320,8 +345,8 @@ std::unique_ptr<column> for_each_concatenate(host_span<column_view const> views,
 
   // If concatenated column is nullable, proceed to calculate it
   if (has_nulls) {
-    col->set_null_count(
-      cudf::detail::concatenate_masks(views, (col->mutable_view()).null_mask(), stream));
+    col->set_null_count(cudf::detail::concatenate_masks_with_resource(
+      views, (col->mutable_view()).null_mask(), stream, mr));
   } else {
     col->set_null_count(0);  // prevent null count from being materialized
   }
@@ -592,9 +617,10 @@ rmm::device_buffer concatenate_masks(std::span<column_view const> views,
     rmm::device_buffer null_mask =
       cudf::detail::create_null_mask(total_element_count, mask_state::UNINITIALIZED, stream, mr);
 
-    detail::concatenate_masks(host_span<column_view const>{views.data(), views.size()},
-                              static_cast<bitmask_type*>(null_mask.data()),
-                              stream);
+    detail::concatenate_masks_with_resource(host_span<column_view const>{views.data(), views.size()},
+                                            static_cast<bitmask_type*>(null_mask.data()),
+                                            stream,
+                                            mr);
 
     return null_mask;
   }

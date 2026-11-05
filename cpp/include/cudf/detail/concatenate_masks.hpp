@@ -36,6 +36,13 @@ size_type concatenate_masks(device_span<column_device_view const> d_views,
                             size_type output_size,
                             cuda::stream_ref stream);
 
+size_type concatenate_masks_with_resource(device_span<column_device_view const> d_views,
+                                          device_span<size_t const> d_offsets,
+                                          bitmask_type* dest_mask,
+                                          size_type output_size,
+                                          cuda::stream_ref stream,
+                                          rmm::device_async_resource_ref mr);
+
 /**
  * @brief Concatenates `views[i]`'s bitmask from the bits
  * `[views[i].offset(), views[i].offset() + views[i].size())` for all elements
@@ -49,6 +56,11 @@ size_type concatenate_masks(device_span<column_device_view const> d_views,
 size_type concatenate_masks(host_span<column_view const> views,
                             bitmask_type* dest_mask,
                             cuda::stream_ref stream);
+
+size_type concatenate_masks_with_resource(host_span<column_view const> views,
+                                          bitmask_type* dest_mask,
+                                          cuda::stream_ref stream,
+                                          rmm::device_async_resource_ref mr);
 
 /**
  * @copydoc cudf::concatenate_masks(std::span<column_view const>, rmm::device_async_resource_ref)
