@@ -112,11 +112,16 @@ std::pair<std::unique_ptr<rmm::device_buffer>, size_type> get_mask_buffer(
   auto const bit_index    = input->offset % bits_in_byte;
   auto const copy_size    = cudf::util::div_rounding_up_safe(num_rows + bit_index, bits_in_byte);
 
-  auto mask = rmm::device_uvector<bitmask_type>(padded_words, stream, mr);
+  auto const source_words = std::max<size_t>(
+    padded_words, cudf::util::div_rounding_up_safe(static_cast<size_t>(copy_size), sizeof(bitmask_type)));
+  auto mask = rmm::device_uvector<bitmask_type>(source_words, stream, mr);
+  // Arrow supplies packed bytes; cuDF reads whole words and may copy padded masks.
+  CUDF_CUDA_TRY(cudaMemsetAsync(mask.data(), 0, mask.size() * sizeof(bitmask_type), stream.get()));
   CUDF_CUDA_TRY(cudf::detail::memcpy_async(mask.data(), bitmap + offset_index, copy_size, stream));
 
   if (mask_words > 0 && bit_index > 0) {
     auto dest_mask = rmm::device_uvector<bitmask_type>(padded_words, stream, mr);
+    CUDF_CUDA_TRY(cudaMemsetAsync(dest_mask.data(), 0, dest_mask.size() * sizeof(bitmask_type), stream.get()));
     cudf::detail::grid_1d config(mask_words, 256);
     copy_shifted_bitmask<<<config.num_blocks, config.num_threads_per_block, 0, stream.get()>>>(
       dest_mask.data(), mask.data(), bit_index, bit_index + num_rows, mask_words);
@@ -191,7 +196,12 @@ std::unique_ptr<column> dispatch_copy_from_arrow_host::operator()<bool>(ArrowSch
   auto const bit_index    = input->offset % bits_in_byte;
   auto const copy_size    = cudf::util::div_rounding_up_safe(num_rows + bit_index, bits_in_byte);
 
-  auto data = rmm::device_uvector<bitmask_type>(data_words, stream, mr);
+  // A byte-offset slice can need one more source word than its normalized output.
+  auto const source_words = cudf::util::div_rounding_up_safe(static_cast<size_t>(copy_size), sizeof(bitmask_type));
+  auto data = rmm::device_uvector<bitmask_type>(source_words, stream, mr);
+  if (source_words > 0) {
+    CUDF_CUDA_TRY(cudaMemsetAsync(data.data(), 0, data.size() * sizeof(bitmask_type), stream.get()));
+  }
   CUDF_CUDA_TRY(
     cudf::detail::memcpy_async(data.data(), data_buffer + offset_index, copy_size, stream));
 
