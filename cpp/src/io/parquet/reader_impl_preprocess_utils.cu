@@ -603,6 +603,10 @@ void decode_page_headers_impl(pass_intermediate_data& pass,
                                                            stream)
                                  .second;
   auto const num_page_counts = page_counts_end - page_counts.begin();
+  // The exclusive scan includes one terminal item for the final offset.
+  // reduce_by_key writes the group counts only; initialize that extra input.
+  CUDF_CUDA_TRY(cudaMemsetAsync(page_counts.data() + num_page_counts,
+                                0, sizeof(size_type), stream.get()));
   pass.page_offsets          = rmm::device_uvector<size_type>(num_page_counts + 1, stream);
   thrust::exclusive_scan(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
                          page_counts.begin(),
