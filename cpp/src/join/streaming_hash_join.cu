@@ -127,6 +127,30 @@ size_type checked_batch_count(size_type batches)
 }
 
 /**
+ * @brief Makes a zero-row schema view without running null-count kernels.
+ *
+ * `cudf::slice(schema, {0, 0})` computes segmented null counts for nullable columns and therefore
+ * allocates scratch from the process-current resource. A zero-row schema has a known null count of
+ * zero, so construct the equivalent views directly. Children are retained exactly as `slice` does,
+ * which preserves dictionary keys and nested type identity for the owning table copy below.
+ */
+table_view zero_row_schema(table_view const& schema)
+{
+  auto columns = std::vector<column_view>{};
+  columns.reserve(schema.num_columns());
+  std::transform(schema.begin(), schema.end(), std::back_inserter(columns), [](auto const& input) {
+    return column_view{input.type(),
+                       0,
+                       input.head(),
+                       input.null_mask(),
+                       0,
+                       input.offset(),
+                       std::vector<column_view>{input.child_begin(), input.child_end()}};
+  });
+  return table_view{columns};
+}
+
+/**
  * @brief Describes how a slot's first 32-bit word is divided between hash and batch ID.
  *
  * The high `batch_bits` store the batch ID and the remaining low bits store the truncated row hash.
@@ -297,10 +321,11 @@ class streaming_hash_join_impl {
                            double load_factor,
                            cuda::stream_ref stream,
                            cudf::memory_resources resource)
-    // Deep copy a zero-row slice rather than `empty_like`, which drops children such as a
-    // dictionary's keys column and would make `have_same_types` reject every partition.
-    : right_schema{std::make_unique<table>(
-        cudf::slice(schema, {0, 0}).front(), stream, resource.get_output_mr())},
+    // Deep copy a zero-row view rather than `empty_like`, which drops children such as a
+    // dictionary's keys column and would make `have_same_types` reject every partition. Construct
+    // the view without `slice`, whose nullable null-count scratch uses the process-current MR.
+    : right_schema{
+        std::make_unique<table>(zero_row_schema(schema), stream, resource.get_output_mr())},
       right_key_indices{key_indices.begin(), key_indices.end()},
       total_right_rows{total_rows},
       max_num_batches{checked_batch_count(maximum_batches)},
@@ -414,6 +439,7 @@ class streaming_hash_join_impl {
   template <bool has_nested, bool use_primitive>
   auto probe(table_view const& left,
              std::optional<std::size_t> output_size,
+             std::optional<std::size_t> maximum_output_size,
              cuda::stream_ref stream,
              cudf::memory_resources resources) const
   {
@@ -452,12 +478,17 @@ class streaming_hash_join_impl {
     auto const input_begin =
       cudf::detail::make_counting_transform_iterator(0, probe_pair_fn{row_hasher, layout});
 
-    auto const join_size = output_size ? *output_size
-                                       : hash_table.count(input_begin,
-                                                          input_begin + left.num_rows(),
-                                                          equality,
-                                                          hash_table.hash_function(),
-                                                          stream.get());
+    auto const join_size = output_size && !maximum_output_size
+                             ? *output_size
+                             : hash_table.count(input_begin,
+                                                input_begin + left.num_rows(),
+                                                equality,
+                                                hash_table.hash_function(),
+                                                stream.get());
+
+    CUDF_EXPECTS(!maximum_output_size || join_size <= *maximum_output_size,
+                 "streaming_hash_join: exact output size exceeds maximum_output_size.",
+                 std::overflow_error);
 
     auto const output_mr = resources.get_output_mr();
     auto left_indices =
@@ -514,10 +545,36 @@ class streaming_hash_join_impl {
           std::make_unique<rmm::device_uvector<size_type>>(0, stream, resources.get_output_mr())}};
     }
     if (cudf::detail::is_primitive_row_op_compatible(left)) {
-      return probe<false, true>(left, output_size, stream, resources);
+      return probe<false, true>(left, output_size, std::nullopt, stream, resources);
     }
-    return has_nested_keys ? probe<true, false>(left, output_size, stream, resources)
-                           : probe<false, false>(left, output_size, stream, resources);
+    return has_nested_keys
+             ? probe<true, false>(left, output_size, std::nullopt, stream, resources)
+             : probe<false, false>(left, output_size, std::nullopt, stream, resources);
+  }
+
+  auto inner_join_with_max_output_size(table_view const& left,
+                                       std::size_t maximum_output_size,
+                                       cuda::stream_ref stream,
+                                       cudf::memory_resources resources) const
+  {
+    CUDF_EXPECTS(inserted_batches.load(std::memory_order_relaxed) > 0,
+                 "streaming_hash_join: inner_join called before any insert().",
+                 std::logic_error);
+    validate_hash_join_probe(right_schema->view().select(right_key_indices), left, has_nulls);
+
+    if (left.num_rows() == 0 || inserted_rows.load(std::memory_order_relaxed) == 0) {
+      return std::pair{
+        std::make_unique<rmm::device_uvector<size_type>>(0, stream, resources.get_output_mr()),
+        std::pair{
+          std::make_unique<rmm::device_uvector<size_type>>(0, stream, resources.get_output_mr()),
+          std::make_unique<rmm::device_uvector<size_type>>(0, stream, resources.get_output_mr())}};
+    }
+    if (cudf::detail::is_primitive_row_op_compatible(left)) {
+      return probe<false, true>(left, std::nullopt, maximum_output_size, stream, resources);
+    }
+    return has_nested_keys
+             ? probe<true, false>(left, std::nullopt, maximum_output_size, stream, resources)
+             : probe<false, false>(left, std::nullopt, maximum_output_size, stream, resources);
   }
 };
 
@@ -571,6 +628,18 @@ streaming_hash_join::inner_join(table_view const& left,
 {
   CUDF_FUNC_RANGE();
   return _impl->inner_join(left, output_size, stream, mr);
+}
+
+std::pair<std::unique_ptr<rmm::device_uvector<size_type>>,
+          std::pair<std::unique_ptr<rmm::device_uvector<size_type>>,
+                    std::unique_ptr<rmm::device_uvector<size_type>>>>
+streaming_hash_join::inner_join_with_max_output_size(table_view const& left,
+                                                      std::size_t maximum_output_size,
+                                                      cuda::stream_ref stream,
+                                                      cudf::memory_resources mr) const
+{
+  CUDF_FUNC_RANGE();
+  return _impl->inner_join_with_max_output_size(left, maximum_output_size, stream, mr);
 }
 
 }  // namespace cudf

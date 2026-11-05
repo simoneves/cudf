@@ -76,6 +76,21 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> partition(
   rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref());
 
 /**
+ * @brief Explicit-resource counterpart of `partition`.
+ *
+ * The output resource owns the returned table. The temporary resource owns every device
+ * allocation released before this function returns. To keep the process-current resource out of
+ * the call, pass an explicitly constructed two-resource bundle; implicit conversion from one
+ * resource preserves `memory_resources`' legacy current-resource temporary selection.
+ */
+std::pair<std::unique_ptr<table>, std::vector<size_type>> partition_with_resources(
+  table_view const& t,
+  column_view const& partition_map,
+  size_type num_partitions,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr);
+
+/**
  * @brief Partitions rows from the input table into multiple output tables.
  *
  * Partitions rows of `input` into `num_partitions` bins based on the hash

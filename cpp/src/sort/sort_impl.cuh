@@ -95,5 +95,56 @@ std::unique_ptr<column> sorted_order(table_view input,
   return sorted_indices;
 }
 
+template <sort_method method>
+std::unique_ptr<column> sorted_order_with_resources(
+  table_view input,
+  std::vector<order> const& column_order,
+  std::vector<null_order> const& null_precedence,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr)
+{
+  CUDF_EXPECTS(input.num_columns() >= 2,
+               "explicit-resource sorted_order requires at least two columns");
+  CUDF_EXPECTS(!cudf::detail::has_nested_columns(input),
+               "explicit-resource sorted_order does not accept nested columns");
+  CUDF_EXPECTS(column_order.empty() ||
+                 static_cast<std::size_t>(input.num_columns()) == column_order.size(),
+               "Mismatch between number of columns and column order.");
+  CUDF_EXPECTS(null_precedence.empty() ||
+                 static_cast<std::size_t>(input.num_columns()) == null_precedence.size(),
+               "Mismatch between number of columns and null_precedence size.");
+
+  auto const output_mr = mr.get_output_mr();
+  auto const temp_mr   = mr.get_temporary_mr();
+  auto sorted_indices  = cudf::make_numeric_column(data_type(type_to_id<size_type>()),
+                                                  input.num_rows(),
+                                                  mask_state::UNALLOCATED,
+                                                  stream,
+                                                  output_mr);
+  auto mutable_indices_view = sorted_indices->mutable_view();
+  thrust::sequence(rmm::exec_policy_nosync(stream, temp_mr),
+                   mutable_indices_view.begin<size_type>(),
+                   mutable_indices_view.end<size_type>(),
+                   0);
+
+  auto const preprocessed =
+    cudf::detail::row::lexicographic::preprocessed_table::create_with_resource(
+      input, column_order, null_precedence, stream, temp_mr);
+  auto const comp = cudf::detail::row::lexicographic::self_comparator{preprocessed};
+  auto const comparator = comp.less<false>(nullate::DYNAMIC{has_nested_nulls(input)});
+  if constexpr (method == sort_method::STABLE) {
+    thrust::stable_sort(rmm::exec_policy_nosync(stream, temp_mr),
+                        mutable_indices_view.begin<size_type>(),
+                        mutable_indices_view.end<size_type>(),
+                        comparator);
+  } else {
+    thrust::sort(rmm::exec_policy_nosync(stream, temp_mr),
+                 mutable_indices_view.begin<size_type>(),
+                 mutable_indices_view.end<size_type>(),
+                 comparator);
+  }
+  return sorted_indices;
+}
+
 }  // namespace detail
 }  // namespace cudf

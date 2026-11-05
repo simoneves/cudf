@@ -30,6 +30,7 @@
 #include <cuda/iterator>
 #include <cuda/stream>
 #include <thrust/scan.h>
+#include <thrust/scatter.h>
 #include <thrust/transform.h>
 
 #include <stdexcept>
@@ -775,11 +776,15 @@ struct dispatch_map_type {
     column_view const& partition_map,
     size_type num_partitions,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) const
+    cudf::memory_resources mr) const
     requires(is_index_type<MapType>())
   {
     // Build a histogram of the number of rows in each partition
-    rmm::device_uvector<size_type> histogram(num_partitions + 1, stream);
+    auto const output_mr = mr.get_output_mr();
+    auto const temp_mr   = mr.get_temporary_mr();
+    rmm::device_uvector<size_type> histogram(num_partitions + 1, stream, temp_mr);
+    CUDF_CUDA_TRY(cudaMemsetAsync(
+      histogram.data(), 0, histogram.size() * sizeof(size_type), stream.get()));
     std::size_t temp_storage_bytes{};
     std::size_t const num_levels = num_partitions + 1;
     size_type const lower_level  = 0;
@@ -794,7 +799,7 @@ struct dispatch_map_type {
                                         partition_map.size(),
                                         stream.get());
 
-    rmm::device_buffer temp_storage(temp_storage_bytes, stream);
+    rmm::device_buffer temp_storage(temp_storage_bytes, stream, temp_mr);
 
     cub::DeviceHistogram::HistogramEven(temp_storage.data(),
                                         temp_storage_bytes,
@@ -808,7 +813,7 @@ struct dispatch_map_type {
 
     // `histogram` was created with an extra entry at the end such that an
     // exclusive scan will put the total number of rows at the end
-    thrust::exclusive_scan(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+    thrust::exclusive_scan(rmm::exec_policy_nosync(stream, temp_mr),
                            histogram.begin(),
                            histogram.end(),
                            histogram.begin());
@@ -818,11 +823,11 @@ struct dispatch_map_type {
 
     // Unfortunately need to materialize the scatter map because
     // `detail::scatter` requires multiple passes through the iterator
-    rmm::device_uvector<size_type> scatter_map(partition_map.size(), stream);
+    rmm::device_uvector<size_type> scatter_map(partition_map.size(), stream, temp_mr);
 
     // For each `partition_map[i]`, atomically increment the corresponding
     // partition offset to determine `i`s location in the output
-    thrust::transform(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+    thrust::transform(rmm::exec_policy_nosync(stream, temp_mr),
                       partition_map.begin<MapType>(),
                       partition_map.end<MapType>(),
                       scatter_map.begin(),
@@ -830,8 +835,20 @@ struct dispatch_map_type {
                         return atomicAdd(&offsets[partition_number], 1);
                       });
 
-    // Scatter the rows into their partitions
-    auto scattered = detail::scatter(t, scatter_map, t, stream, mr);
+    // Invert the output-location map and gather. The explicit-resource gather path already routes
+    // all nested and validity temporaries independently from returned column storage.
+    rmm::device_uvector<size_type> gather_map(partition_map.size(), stream, temp_mr);
+    thrust::scatter(rmm::exec_policy_nosync(stream, temp_mr),
+                    cuda::counting_iterator<size_type>{0},
+                    cuda::counting_iterator<size_type>{partition_map.size()},
+                    scatter_map.begin(),
+                    gather_map.begin());
+    auto scattered = cudf::detail::gather(t,
+                                          gather_map,
+                                          out_of_bounds_policy::DONT_CHECK,
+                                          negative_index_policy::NOT_ALLOWED,
+                                          stream,
+                                          cudf::memory_resources{output_mr, temp_mr});
 
     return std::pair{std::move(scattered), std::move(partition_offsets)};
   }
@@ -907,7 +924,7 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> partition(
   column_view const& partition_map,
   size_type num_partitions,
   cuda::stream_ref stream,
-  rmm::device_async_resource_ref mr)
+  cudf::memory_resources mr)
 {
   CUDF_EXPECTS(t.num_rows() == partition_map.size(),
                "Size mismatch between table and partition map.");
@@ -981,6 +998,18 @@ std::pair<std::unique_ptr<table>, std::vector<size_type>> partition(
   size_type num_partitions,
   cuda::stream_ref stream,
   rmm::device_async_resource_ref mr)
+{
+  CUDF_FUNC_RANGE();
+  return detail::partition(
+    t, partition_map, num_partitions, stream, cudf::memory_resources{mr});
+}
+
+std::pair<std::unique_ptr<table>, std::vector<size_type>> partition_with_resources(
+  table_view const& t,
+  column_view const& partition_map,
+  size_type num_partitions,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr)
 {
   CUDF_FUNC_RANGE();
   return detail::partition(t, partition_map, num_partitions, stream, mr);

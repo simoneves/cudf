@@ -710,6 +710,16 @@ struct preprocessed_table {
                                                     cuda::stream_ref stream);
 
   /**
+   * @brief Explicit-resource preprocessing for a non-nested comparison table.
+   */
+  static std::shared_ptr<preprocessed_table> create_with_resource(
+    table_view const& table,
+    host_span<order const> column_order,
+    host_span<null_order const> null_precedence,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+  /**
    * @brief Preprocess tables for use with lexicographical comparison
    *
    * Sets up the tables for use with lexicographical comparison. The resulting preprocessed tables

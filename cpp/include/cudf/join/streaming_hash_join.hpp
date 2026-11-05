@@ -180,6 +180,43 @@ class streaming_hash_join {
              cuda::stream_ref stream                = cudf::get_default_stream(),
              cudf::memory_resources mr = cudf::get_current_device_resource_ref()) const;
 
+  /**
+   * @brief Returns the row indices for an inner join, rejecting an oversized result before any
+   *        result-map allocation.
+   *
+   * This function first counts the exact number of matches. If that count exceeds
+   * `maximum_output_size`, it throws without allocating any of the three returned index maps and
+   * without modifying the inserted partitions or the persistent hash table. A subsequent probe of
+   * the same join object therefore observes the same build-side state.
+   *
+   * This function must not run concurrently with `insert()`.
+   *
+   * @param left The left table, from which the tuples are probed.
+   * @param maximum_output_size Maximum number of matches that may be materialized.
+   * @param stream CUDA stream used for device memory operations and kernel launches.
+   * @param mr Memory resources used to allocate the returned maps and call-local probe scratch.
+   *           The exact-count operation also makes one bounded transient allocation through the
+   *           construction-time hash-table resource and releases it before returning or throwing.
+   * @return Pair `[left_indices, [right_batch_indices, right_row_indices]]`, with the same
+   *         interpretation as `inner_join()`.
+   *
+   * @throws std::overflow_error if the exact result size exceeds `maximum_output_size`
+   * @throws std::logic_error if called before any `insert()`
+   * @throws std::invalid_argument if `left` has no columns
+   * @throws std::invalid_argument if `left` and the right-side keys have different column counts
+   * @throws std::invalid_argument if `left` has nulls but the join was constructed with
+   *                               `nullable_join::NO`
+   * @throws cudf::data_type_error if the `left` and right-side key column types differ
+   */
+  [[nodiscard]] std::pair<std::unique_ptr<rmm::device_uvector<size_type>>,
+                          std::pair<std::unique_ptr<rmm::device_uvector<size_type>>,
+                                    std::unique_ptr<rmm::device_uvector<size_type>>>>
+  inner_join_with_max_output_size(
+    cudf::table_view const& left,
+    std::size_t maximum_output_size,
+    cuda::stream_ref stream   = cudf::get_default_stream(),
+    cudf::memory_resources mr = cudf::get_current_device_resource_ref()) const;
+
  private:
   std::unique_ptr<cudf::detail::streaming_hash_join_impl> _impl;
 };

@@ -28,6 +28,17 @@ std::unique_ptr<column> sorted_order(table_view const& input,
   return sorted_order<sort_method::UNSTABLE>(input, column_order, null_precedence, stream, mr);
 }
 
+std::unique_ptr<column> sorted_order_with_resources(
+  table_view const& input,
+  std::vector<order> const& column_order,
+  std::vector<null_order> const& null_precedence,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr)
+{
+  return sorted_order_with_resources<sort_method::UNSTABLE>(
+    input, column_order, null_precedence, stream, mr);
+}
+
 std::unique_ptr<table> sort_by_key(table_view const& values,
                                    table_view const& keys,
                                    std::vector<order> const& column_order,
@@ -76,6 +87,18 @@ std::unique_ptr<column> sorted_order(table_view const& input,
 {
   CUDF_FUNC_RANGE();
   return detail::sorted_order(input, column_order, null_precedence, stream, mr);
+}
+
+std::unique_ptr<column> sorted_order_with_resources(
+  table_view const& input,
+  std::vector<order> const& column_order,
+  std::vector<null_order> const& null_precedence,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr)
+{
+  CUDF_FUNC_RANGE();
+  return detail::sorted_order_with_resources(
+    input, column_order, null_precedence, stream, mr);
 }
 
 std::unique_ptr<table> sort(table_view const& input,

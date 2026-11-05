@@ -49,6 +49,22 @@ std::unique_ptr<column> sorted_order(
   rmm::device_async_resource_ref mr              = cudf::get_current_device_resource_ref());
 
 /**
+ * @brief Explicit-resource multi-column counterpart of `sorted_order`.
+ *
+ * The output resource owns the returned index column. The temporary resource owns every device
+ * allocation released before this function returns. This bounded entry point accepts at least two
+ * non-nested columns. To keep the process-current resource out of the call, pass an explicitly
+ * constructed two-resource bundle; implicit conversion from one resource preserves
+ * `memory_resources`' legacy current-resource temporary selection.
+ */
+std::unique_ptr<column> sorted_order_with_resources(
+  table_view const& input,
+  std::vector<order> const& column_order,
+  std::vector<null_order> const& null_precedence,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr);
+
+/**
  * @brief Computes the row indices that would produce `input` in a stable
  * lexicographical sorted order.
  *
