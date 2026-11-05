@@ -489,7 +489,11 @@ std::vector<size_type> batch_count_set_bits(host_span<bitmask_type const* const>
     std::any_of(bitmasks.begin(), bitmasks.end(), [](auto p) { return p != nullptr; });
   if (!has_bitmask) { return output; }
 
-  auto const d_bitmasks = cudf::detail::make_device_uvector_async(bitmasks, stream, mr);
+  rmm::device_uvector<bitmask_type const*> d_bitmasks(num_bitmasks, stream, mr);
+  // This is a borrowed host pointer array, including on unified-memory hosts.
+  // State its copy direction explicitly rather than inferring pointer residency.
+  CUDF_CUDA_TRY(cudaMemcpyAsync(d_bitmasks.data(), bitmasks.data(), bitmasks.size_bytes(),
+                                cudaMemcpyHostToDevice, stream.get()));
   auto const num_words  = num_bitmask_words(num_bits_to_count);
   auto d_non_zero_count =
     cudf::detail::make_zeroed_device_uvector_async<size_type>(num_bitmasks, stream, mr);
