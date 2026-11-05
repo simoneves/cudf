@@ -402,6 +402,11 @@ cudf::detail::hostdevice_vector<PageInfo> sort_pages(device_span<PageInfo const>
     sort_indices.begin(),
     cuda::std::less<int>());
   auto pass_pages = cudf::detail::hostdevice_vector<PageInfo>(unsorted_pages.size(), stream);
+  // Struct assignment writes members, not padding read by the host transfer.
+  if (!unsorted_pages.empty()) {
+    CUDF_CUDA_TRY(cudaMemsetAsync(pass_pages.device_ptr(), 0,
+                                  unsorted_pages.size_bytes(), stream.get()));
+  }
   thrust::gather(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
                  sort_indices.begin(),
                  sort_indices.end(),
