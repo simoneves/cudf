@@ -27,6 +27,9 @@
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
+#include <rmm/device_uvector.hpp>
+#include <rmm/exec_policy.hpp>
+#include <thrust/transform.h>
 
 #include <rmm/device_buffer.hpp>
 #include <rmm/exec_policy.hpp>
@@ -73,6 +76,16 @@ void enable_hugepage(ArrowBuffer* buffer)
   }
 #endif
 }
+
+template <typename T>
+struct initialized_nullable_value {
+  T const* data;
+  bitmask_type const* mask;
+  size_type offset;
+  __device__ T operator()(size_type row) const {
+    return bit_is_set(mask, row + offset) ? data[row] : T{};
+  }
+};
 
 struct dispatch_to_arrow_host {
   cudf::column_view column;
@@ -123,8 +136,21 @@ struct dispatch_to_arrow_host {
 
     NANOARROW_RETURN_NOT_OK(populate_validity_bitmap(ArrowArrayValidityBitmap(tmp.get())));
     using DataType = device_storage_type_t<T>;
+    // NULL payloads are unspecified by the column contract. Materialize them
+    // only at this host transfer boundary; retain the original validity bitmap.
+    std::optional<rmm::device_uvector<DataType>> initialized;
+    auto data = column.data<DataType>();
+    if (column.has_nulls()) {
+      auto const temp_mr = cudf::get_current_device_resource_ref();
+      initialized.emplace(column.size(), stream, temp_mr);
+      auto rows = cuda::counting_iterator<size_type>{0};
+      thrust::transform(rmm::exec_policy_nosync(stream, temp_mr), rows, rows + column.size(),
+                        initialized->begin(),
+                        initialized_nullable_value<DataType>{data, column.null_mask(), column.offset()});
+      data = initialized->data();
+    }
     NANOARROW_RETURN_NOT_OK(
-      populate_data_buffer(device_span<DataType const>(column.data<DataType>(), column.size()),
+      populate_data_buffer(device_span<DataType const>(data, column.size()),
                            ArrowArrayBuffer(tmp.get(), fixed_width_data_buffer_idx)));
 
     ArrowArrayMove(tmp.get(), out);
