@@ -147,7 +147,8 @@ int dispatch_to_arrow_host::operator()<bool>(ArrowArray* out) const
   auto bitmask = detail::bools_to_mask(column, stream, mr);
   NANOARROW_RETURN_NOT_OK(populate_data_buffer(
     device_span<uint8_t const>(reinterpret_cast<uint8_t const*>(bitmask.first->data()),
-                               bitmask.first->size()),
+                               cudf::util::div_rounding_up_safe(
+                                 static_cast<size_t>(column.size()), size_t{8})),
     ArrowArrayBuffer(tmp.get(), fixed_width_data_buffer_idx)));
 
   ArrowArrayMove(tmp.get(), out);

@@ -364,11 +364,17 @@ rmm::device_buffer copy_bitmask(bitmask_type const* mask,
   rmm::device_buffer dest_mask{};
   auto num_bytes = bitmask_allocation_size_bytes(end_bit - begin_bit);
   if ((mask == nullptr) || (num_bytes == 0)) { return dest_mask; }
+  auto number_of_mask_words = num_bitmask_words(end_bit - begin_bit);
+  auto const active_bytes = static_cast<size_t>(number_of_mask_words) * sizeof(bitmask_type);
+  dest_mask = rmm::device_buffer{num_bytes, stream, mr};
+  // Producers initialize logical mask words, not arbitrary allocation padding.
+  if (num_bytes > active_bytes) {
+    CUDF_CUDA_TRY(cudaMemsetAsync(static_cast<char*>(dest_mask.data()) + active_bytes,
+                                  0, num_bytes - active_bytes, stream.get()));
+  }
   if (begin_bit == 0) {
-    dest_mask = rmm::device_buffer{static_cast<void const*>(mask), num_bytes, stream, mr};
+    CUDF_CUDA_TRY(detail::memcpy_async(dest_mask.data(), mask, active_bytes, stream));
   } else {
-    auto number_of_mask_words = num_bitmask_words(end_bit - begin_bit);
-    dest_mask                 = rmm::device_buffer{num_bytes, stream, mr};
     cudf::detail::grid_1d config(number_of_mask_words, 256);
     copy_offset_bitmask<<<config.num_blocks, config.num_threads_per_block, 0, stream.get()>>>(
       static_cast<bitmask_type*>(dest_mask.data()), mask, begin_bit, end_bit, number_of_mask_words);
