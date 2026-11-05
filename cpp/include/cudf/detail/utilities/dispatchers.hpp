@@ -68,9 +68,9 @@ template <typename Func>
 auto dispatch_bool(bool value, Func&& func)
 {
   if (value) {
-    return func(std::bool_constant<true>{});
+    return func(std::integral_constant<bool, true>{});
   } else {
-    return func(std::bool_constant<false>{});
+    return func(std::integral_constant<bool, false>{});
   }
 }
 
