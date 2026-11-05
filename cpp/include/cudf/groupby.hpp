@@ -599,6 +599,16 @@ class streaming_groupby {
                        cudf::memory_resources mr = cudf::get_current_device_resource_ref()) &&;
 
   /**
+   * @brief Finalize using explicit output and temporary memory resources.
+   *
+   * @param stream CUDA stream used for device memory operations and kernel launches
+   * @param mr Memory resources used for returned allocations and temporary work
+   * @return Pair of distinct keys table and a vector of aggregation_results (one per request)
+   */
+  [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> finalize(
+    cuda::stream_ref stream, cudf::memory_resources mr) const;
+
+  /**
    * @brief Returns the number of distinct keys accumulated so far.
    *
    * Returns 0 before any successful `aggregate()` or `merge()` call, after
@@ -618,6 +628,8 @@ class streaming_groupby {
     cuda::stream_ref stream, rmm::device_async_resource_ref mr) const;
   [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
   do_finalize_and_release(cuda::stream_ref stream, cudf::memory_resources mr);
+  [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> do_finalize(
+    cuda::stream_ref stream, cudf::memory_resources mr) const;
 };
 
 /**

@@ -67,9 +67,9 @@ inline std::vector<aggregation_result> extract_results(std::span<RequestType con
 std::pair<cuda::device_buffer<std::byte>, bitmask_type const*> compute_row_bitmask(
   table_view const& keys, cuda::stream_ref stream);
 
-/// Explicit-resource counterpart used by stateful operators.
+/// Explicit output/temporary-resource counterpart used by stateful operators.
 std::pair<cuda::device_buffer<std::byte>, bitmask_type const*> compute_row_bitmask(
-  table_view const& keys, cuda::stream_ref stream, rmm::device_async_resource_ref mr);
+  table_view const& keys, cuda::stream_ref stream, cudf::memory_resources mr);
 
 /// Whether the given aggregation kind is supported by hash-based groupby.
 constexpr bool is_hash_aggregation(aggregation::Kind k)

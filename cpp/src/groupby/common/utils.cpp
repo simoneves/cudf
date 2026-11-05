@@ -6,6 +6,7 @@
 #include "groupby/common/utils.hpp"
 
 #include <cudf/copying.hpp>
+#include <cudf/detail/null_mask.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
@@ -18,7 +19,7 @@ std::pair<cuda::device_buffer<std::byte>, bitmask_type const*> compute_row_bitma
 }
 
 std::pair<cuda::device_buffer<std::byte>, bitmask_type const*> compute_row_bitmask(
-  table_view const& keys, cuda::stream_ref stream, rmm::device_async_resource_ref mr)
+  table_view const& keys, cuda::stream_ref stream, cudf::memory_resources mr)
 {
   if (keys.num_columns() == 0 || !cudf::has_nulls(keys)) {
     return {cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr), nullptr};
@@ -34,7 +35,7 @@ std::pair<cuda::device_buffer<std::byte>, bitmask_type const*> compute_row_bitma
     auto ptr = reinterpret_cast<bitmask_type const*>(buf.data());
     return {std::move(buf), ptr};
   }
-  auto [buf, null_count] = cudf::bitmask_and(keys, stream, mr);
+  auto [buf, null_count] = cudf::detail::bitmask_and(keys, stream, mr);
   if (null_count == 0) {
     return {cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr), nullptr};
   }

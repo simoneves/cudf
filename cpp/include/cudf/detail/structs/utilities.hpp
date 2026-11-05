@@ -262,6 +262,17 @@ class flattened_table {
   column_view const& input, cuda::stream_ref stream, rmm::device_async_resource_ref mr);
 
 /**
+ * @brief Pushes nulls into children using distinct resources for retained and temporary data.
+ *
+ * @param input Input column whose nulls are propagated
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Resources used for retained preprocessing data and intermediate allocations
+ * @return Processed view and the retained nullable data that backs it
+ */
+[[nodiscard]] std::pair<column_view, temporary_nullable_data> push_down_nulls(
+  column_view const& input, cuda::stream_ref stream, cudf::memory_resources mr);
+
+/**
  * @brief Push down nulls from columns of the input table into their children columns, using
  * bitwise AND.
  *
@@ -287,6 +298,17 @@ class flattened_table {
  */
 [[nodiscard]] std::pair<table_view, temporary_nullable_data> push_down_nulls(
   table_view const& input, cuda::stream_ref stream, rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Pushes nulls into table children using distinct retained and temporary resources.
+ *
+ * @param input Input table whose nulls are propagated
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Resources used for retained preprocessing data and intermediate allocations
+ * @return Processed view and the retained nullable data that backs it
+ */
+[[nodiscard]] std::pair<table_view, temporary_nullable_data> push_down_nulls(
+  table_view const& input, cuda::stream_ref stream, cudf::memory_resources mr);
 
 /**
  * @brief Checks if a column or any of its children is a struct column with structs that are null.
