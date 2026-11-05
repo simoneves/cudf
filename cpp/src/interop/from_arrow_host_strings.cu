@@ -54,7 +54,10 @@ std::unique_ptr<column> from_arrow_string(ArrowSchemaView const* schema,
 
   rmm::device_buffer chars(char_data_length, stream, mr);
   auto const* chars_data = static_cast<uint8_t const*>(input->buffers[chars_buffer_idx]) + offset;
-  CUDF_CUDA_TRY(cudf::detail::memcpy_async(chars.data(), chars_data, chars.size(), stream));
+  if (chars.size() > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(chars.data(), chars_data, chars.size(),
+                                  cudaMemcpyHostToDevice, stream.get()));
+  }
 
   return make_strings_column(static_cast<size_type>(input->length),
                              std::move(offsets_column),
