@@ -468,7 +468,8 @@ CUDF_KERNEL void count_set_bits_kernel(device_span<bitmask_type const* const> bi
 std::vector<size_type> batch_count_set_bits(host_span<bitmask_type const* const> bitmasks,
                                             size_type start,
                                             size_type stop,
-                                            cuda::stream_ref stream)
+                                            cuda::stream_ref stream,
+                                            rmm::device_async_resource_ref mr)
 {
   CUDF_EXPECTS(start >= 0 and start <= stop, "Invalid bit range.", std::invalid_argument);
 
@@ -482,11 +483,10 @@ std::vector<size_type> batch_count_set_bits(host_span<bitmask_type const* const>
     std::any_of(bitmasks.begin(), bitmasks.end(), [](auto p) { return p != nullptr; });
   if (!has_bitmask) { return output; }
 
-  auto const tmp_mr     = cudf::get_current_device_resource_ref();
-  auto const d_bitmasks = cudf::detail::make_device_uvector_async(bitmasks, stream, tmp_mr);
+  auto const d_bitmasks = cudf::detail::make_device_uvector_async(bitmasks, stream, mr);
   auto const num_words  = num_bitmask_words(num_bits_to_count);
   auto d_non_zero_count =
-    cudf::detail::make_zeroed_device_uvector_async<size_type>(num_bitmasks, stream, tmp_mr);
+    cudf::detail::make_zeroed_device_uvector_async<size_type>(num_bitmasks, stream, mr);
 
   constexpr size_type block_size{256};
   // We use a 2D grid to launch the kernel, where the first dimension is to access elements in each
@@ -518,7 +518,9 @@ size_type count_set_bits(bitmask_type const* bitmask,
 {
   CUDF_EXPECTS(bitmask != nullptr, "Invalid bitmask.");
   auto const bitmasks = std::vector<bitmask_type const*>{bitmask};
-  return detail::batch_count_set_bits(bitmasks, start, stop, stream).front();
+  return detail::batch_count_set_bits(
+           bitmasks, start, stop, stream, cudf::get_current_device_resource_ref())
+    .front();
 }
 
 // Count zero bits in the specified range
@@ -620,12 +622,35 @@ std::pair<rmm::device_buffer, size_type> bitmask_and(host_span<bitmask_type cons
     mr);
 }
 
+std::pair<rmm::device_buffer, size_type> bitmask_and(
+  host_span<bitmask_type const* const> masks,
+  host_span<size_type const> begin_bits,
+  size_type mask_size,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr)
+{
+  return bitmask_binop(
+    [] __device__(bitmask_type left, bitmask_type right) { return left & right; },
+    masks,
+    begin_bits,
+    mask_size,
+    stream,
+    mr);
+}
+
 // Returns the bitwise AND of the null masks of all columns in the table view
 std::pair<rmm::device_buffer, size_type> bitmask_and(table_view const& view,
                                                      cuda::stream_ref stream,
                                                      rmm::device_async_resource_ref mr)
 {
-  rmm::device_buffer null_mask{0, stream, mr};
+  return bitmask_and(view, stream, cudf::memory_resources{mr});
+}
+
+std::pair<rmm::device_buffer, size_type> bitmask_and(table_view const& view,
+                                                     cuda::stream_ref stream,
+                                                     cudf::memory_resources mr)
+{
+  rmm::device_buffer null_mask{0, stream, mr.get_output_mr()};
   if (view.num_rows() == 0 or view.num_columns() == 0) {
     return std::pair(std::move(null_mask), 0);
   }
@@ -902,9 +927,19 @@ std::vector<size_type> batch_null_count(host_span<bitmask_type const* const> bit
                                         size_type stop,
                                         cuda::stream_ref stream)
 {
+  return batch_null_count(
+    bitmasks, start, stop, stream, cudf::get_current_device_resource_ref());
+}
+
+std::vector<size_type> batch_null_count(host_span<bitmask_type const* const> bitmasks,
+                                        size_type start,
+                                        size_type stop,
+                                        cuda::stream_ref stream,
+                                        rmm::device_async_resource_ref mr)
+{
   CUDF_FUNC_RANGE();
 
-  auto counts                  = detail::batch_count_set_bits(bitmasks, start, stop, stream);
+  auto counts = detail::batch_count_set_bits(bitmasks, start, stop, stream, mr);
   auto const num_bits_to_count = stop - start;
   for (std::size_t i = 0; i < bitmasks.size(); ++i) {
     if (bitmasks[i] != nullptr) { counts[i] = num_bits_to_count - counts[i]; }

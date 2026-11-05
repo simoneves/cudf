@@ -15,6 +15,7 @@
 #include <cudf/detail/aggregation/aggregation.hpp>
 #include <cudf/detail/aggregation/result_cache.hpp>
 #include <cudf/detail/copy.hpp>
+#include <cudf/detail/gather.cuh>
 #include <cudf/detail/groupby.hpp>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/table/table.hpp>
@@ -25,6 +26,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <cuda/iterator>
 #include <cuda/stream>
 
 #include <algorithm>
@@ -236,37 +238,58 @@ void streaming_groupby::impl::update_nullable_state(table_view const& batch_keys
 }
 
 std::unique_ptr<table> streaming_groupby::impl::gather_agg_results(
-  cuda::stream_ref stream, rmm::device_async_resource_ref mr) const
+  cuda::stream_ref stream, cudf::memory_resources mr) const
 {
   // The results we care about are dense in `[0, _distinct_keys)` and can be extracted by
-  // slice+copy.
-  auto const sliced =
-    cudf::detail::slice(
-      _agg_results->view(), {0, _distinct_keys.load(std::memory_order_relaxed)}, stream)
-      .front();
-  return std::make_unique<table>(sliced, stream, mr);
+  // an identity gather whose nested-copy scratch honors the temporary resource.
+  auto const size  = _distinct_keys.load(std::memory_order_relaxed);
+  auto const begin = cuda::counting_iterator<size_type>{0};
+  return cudf::detail::gather(
+    _agg_results->view(), begin, begin + size, out_of_bounds_policy::DONT_CHECK, stream, mr);
 }
 
 std::unique_ptr<table> streaming_groupby::impl::gather_distinct_keys(
-  cuda::stream_ref stream, rmm::device_async_resource_ref mr) const
+  cuda::stream_ref stream, cudf::memory_resources mr) const
 {
   if (_compacted_batches.empty()) {
-    return std::make_unique<table>(_empty_key_schema->view(), stream, mr);
+    auto const begin = cuda::counting_iterator<size_type>{0};
+    return cudf::detail::gather(_empty_key_schema->view(),
+                                begin,
+                                begin,
+                                out_of_bounds_policy::DONT_CHECK,
+                                stream,
+                                mr);
   }
   if (_compacted_batches.size() == 1) {
-    return std::make_unique<table>(_compacted_batches[0]->view(), stream, mr);
+    auto const size  = _compacted_batches[0]->num_rows();
+    auto const begin = cuda::counting_iterator<size_type>{0};
+    return cudf::detail::gather(_compacted_batches[0]->view(),
+                                begin,
+                                begin + size,
+                                out_of_bounds_policy::DONT_CHECK,
+                                stream,
+                                mr);
   }
   std::vector<table_view> distinct_keys(_compacted_batches.size());
   std::transform(_compacted_batches.begin(),
                  _compacted_batches.end(),
                  distinct_keys.begin(),
                  [](auto const& batch) { return batch->view(); });
-  return cudf::concatenate(distinct_keys, stream, mr);
+  // Concatenation currently takes one resource for both result storage and scratch. Keep that
+  // intermediate entirely temporary, then gather it into output storage with separate scratch.
+  auto temporary_keys = cudf::concatenate(distinct_keys, stream, mr.get_temporary_mr());
+  auto const begin     = cuda::counting_iterator<size_type>{0};
+  return cudf::detail::gather(temporary_keys->view(),
+                              begin,
+                              begin + temporary_keys->num_rows(),
+                              out_of_bounds_policy::DONT_CHECK,
+                              stream,
+                              mr);
 }
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
 streaming_groupby::impl::do_finalize(cuda::stream_ref stream,
-                                     rmm::device_async_resource_ref mr) const
+                                     cudf::memory_resources mr) const
 {
   CUDF_EXPECTS(_initialized, "Cannot finalize streaming_groupby with no accumulated data.");
 
@@ -301,14 +324,20 @@ streaming_groupby::impl::do_finalize(cuda::stream_ref stream,
     detail::hash::extract_single_pass_aggs(column_grouped, stream);
 
   cudf::detail::result_cache cache(_agg_kinds.size());
-  detail::hash::finalize_output(values_view_fin, agg_objects_fin, agg_gathered, &cache, stream);
+  detail::hash::finalize_output(values_view_fin,
+                                agg_objects_fin,
+                                agg_gathered,
+                                &cache,
+                                stream,
+                                mr.get_temporary_mr());
 
   if (_has_compound_aggs) {
     // Compute compound aggs (MEAN/STD/VARIANCE/M2/...) into the cache.  The cache itself
     // dedupes: skip if (column, kind) is already there from a prior agg in the group.
     for (auto const& req : column_grouped) {
       auto const finalizer =
-        detail::hash::hash_compound_agg_finalizer(req.values, &cache, nullptr, stream, mr);
+        detail::hash::hash_compound_agg_finalizer(
+          req.values, &cache, nullptr, stream, mr.get_output_mr());
       for (auto const& agg : req.aggregations) {
         if (cache.has_result(req.values, *agg)) continue;
         cudf::detail::aggregation_dispatcher(agg->kind, finalizer, *agg);
@@ -330,7 +359,7 @@ streaming_groupby::impl::do_finalize(cuda::stream_ref stream,
 
   return {std::move(keys),
           detail::extract_results(
-            std::span<aggregation_request const>{user_requests}, cache, stream, mr)};
+            std::span<aggregation_request const>{user_requests}, cache, stream, mr.get_output_mr())};
 }
 
 streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_insert(
@@ -374,6 +403,12 @@ void streaming_groupby::do_merge(streaming_groupby const& other, cuda::stream_re
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_groupby::do_finalize(
   cuda::stream_ref stream, rmm::device_async_resource_ref mr) const
+{
+  return do_finalize(stream, cudf::memory_resources{mr});
+}
+
+std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_groupby::do_finalize(
+  cuda::stream_ref stream, cudf::memory_resources mr) const
 {
   return _impl->do_finalize(stream, mr);
 }

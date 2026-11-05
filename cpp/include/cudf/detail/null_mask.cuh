@@ -231,6 +231,15 @@ size_type inplace_bitmask_binop(Binop op,
                                 host_span<bitmask_type const* const> masks,
                                 host_span<size_type const> masks_begin_bits,
                                 size_type mask_size_bits,
+                                cuda::stream_ref stream,
+                                rmm::device_async_resource_ref mr);
+
+template <typename Binop>
+size_type inplace_bitmask_binop(Binop op,
+                                device_span<bitmask_type> dest_mask,
+                                host_span<bitmask_type const* const> masks,
+                                host_span<size_type const> masks_begin_bits,
+                                size_type mask_size_bits,
                                 cuda::stream_ref stream);
 
 template <typename Binop>
@@ -258,9 +267,10 @@ std::pair<rmm::device_buffer, size_type> bitmask_binop(Binop op,
                                                        host_span<size_type const> masks_begin_bits,
                                                        size_type mask_size_bits,
                                                        cuda::stream_ref stream,
-                                                       rmm::device_async_resource_ref mr)
+                                                       cudf::memory_resources mr)
 {
-  auto dest_mask = rmm::device_buffer{bitmask_allocation_size_bytes(mask_size_bits), stream, mr};
+  auto dest_mask = rmm::device_buffer{
+    bitmask_allocation_size_bytes(mask_size_bits), stream, mr.get_output_mr()};
   auto null_count =
     mask_size_bits -
     inplace_bitmask_binop(op,
@@ -269,9 +279,22 @@ std::pair<rmm::device_buffer, size_type> bitmask_binop(Binop op,
                           masks,
                           masks_begin_bits,
                           mask_size_bits,
-                          stream);
+                          stream,
+                          mr.get_temporary_mr());
 
   return std::pair(std::move(dest_mask), null_count);
+}
+
+template <typename Binop>
+std::pair<rmm::device_buffer, size_type> bitmask_binop(Binop op,
+                                                       host_span<bitmask_type const* const> masks,
+                                                       host_span<size_type const> masks_begin_bits,
+                                                       size_type mask_size_bits,
+                                                       cuda::stream_ref stream,
+                                                       rmm::device_async_resource_ref mr)
+{
+  return bitmask_binop(
+    op, masks, masks_begin_bits, mask_size_bits, stream, cudf::memory_resources{mr});
 }
 
 template <typename Binop>
@@ -342,7 +365,8 @@ size_type inplace_bitmask_binop(Binop op,
                                 host_span<bitmask_type const* const> masks,
                                 host_span<size_type const> masks_begin_bits,
                                 size_type mask_size_bits,
-                                cuda::stream_ref stream)
+                                cuda::stream_ref stream,
+                                rmm::device_async_resource_ref mr)
 {
   CUDF_EXPECTS(
     std::all_of(masks_begin_bits.begin(), masks_begin_bits.end(), [](auto b) { return b >= 0; }),
@@ -351,7 +375,6 @@ size_type inplace_bitmask_binop(Binop op,
   CUDF_EXPECTS(std::all_of(masks.begin(), masks.end(), [](auto p) { return p != nullptr; }),
                "Mask pointer cannot be null");
 
-  rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref();
   cudf::detail::device_scalar<size_type> d_counter{0, stream, mr};
 
   auto d_masks      = cudf::detail::make_device_uvector_async(masks, stream, mr);
@@ -364,6 +387,23 @@ size_type inplace_bitmask_binop(Binop op,
       op, dest_mask, d_masks, d_begin_bits, mask_size_bits, d_counter.data());
   CUDF_CHECK_CUDA(stream.get());
   return d_counter.value(stream);
+}
+
+template <typename Binop>
+size_type inplace_bitmask_binop(Binop op,
+                                device_span<bitmask_type> dest_mask,
+                                host_span<bitmask_type const* const> masks,
+                                host_span<size_type const> masks_begin_bits,
+                                size_type mask_size_bits,
+                                cuda::stream_ref stream)
+{
+  return inplace_bitmask_binop(op,
+                               dest_mask,
+                               masks,
+                               masks_begin_bits,
+                               mask_size_bits,
+                               stream,
+                               cudf::get_current_device_resource_ref());
 }
 
 /**

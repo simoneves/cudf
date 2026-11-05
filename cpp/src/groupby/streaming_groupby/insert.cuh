@@ -34,8 +34,8 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
   auto const has_null   = cudf::nullate::DYNAMIC{_has_nullable_keys};
 
   // Preprocess batch for row operators.
-  auto preprocessed_batch =
-    cudf::detail::row::hash::preprocessed_table::create(batch_keys, stream, temp_mr);
+  auto preprocessed_batch = cudf::detail::row::hash::preprocessed_table::create(
+    batch_keys, stream, cudf::memory_resources{temp_mr, temp_mr});
   auto const batch_hasher_obj = cudf::detail::row::hash::row_hasher{preprocessed_batch};
   auto const d_batch_hash     = batch_hasher_obj.device_hasher(has_null);
 
@@ -44,7 +44,8 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
   auto const skip_rows_with_nulls = _has_nullable_keys && _null_handling == null_policy::EXCLUDE;
   auto [bitmask_buffer, batch_bitmask] =
     skip_rows_with_nulls
-      ? detail::compute_row_bitmask(batch_keys, stream, temp_mr)
+      ? detail::compute_row_bitmask(
+          batch_keys, stream, cudf::memory_resources{temp_mr, temp_mr})
       : std::pair<rmm::device_buffer, bitmask_type const*>{
           rmm::device_buffer{0, stream, temp_mr}, nullptr};
 
@@ -112,8 +113,8 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
                                           stream,
                                           cudf::memory_resources{temp_mr, temp_mr});
 
-    auto preprocessed_compacted =
-      cudf::detail::row::hash::preprocessed_table::create(compacted->view(), stream, temp_mr);
+    auto preprocessed_compacted = cudf::detail::row::hash::preprocessed_table::create(
+      compacted->view(), stream, cudf::memory_resources{temp_mr, temp_mr});
 
     // Store the compacted batch.
     auto const new_batch_id    = static_cast<size_type>(_compacted_batches.size());

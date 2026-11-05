@@ -401,7 +401,7 @@ std::vector<std::unique_ptr<column>> superimpose_nulls(
  * @copydoc cudf::structs::detail::push_down_nulls
  */
 std::pair<column_view, temporary_nullable_data> push_down_nulls_no_sanitize(
-  column_view const& input, cuda::stream_ref stream, rmm::device_async_resource_ref mr)
+  column_view const& input, cuda::stream_ref stream, cudf::memory_resources mr)
 {
   auto ret_nullable_data = temporary_nullable_data{};
   if (input.type().id() != type_id::STRUCT) {
@@ -501,13 +501,15 @@ std::unique_ptr<column> superimpose_and_sanitize_nulls(bitmask_type const* null_
   input = superimpose_nulls(null_mask, null_count, std::move(input), stream, mr);
 
   nvtxRangePushA("purging");
-  if (auto const input_view = input->view(); cudf::detail::has_nonempty_nulls(input_view, stream)) {
+  if (auto const input_view = input->view();
+      cudf::detail::has_nonempty_nulls(input_view, stream, mr)) {
     // We can't call `purge_nonempty_nulls` for individual child column(s) that need to be
     // sanitized. Instead, we have to call it from the top level column.
     // This is to make sure all the columns (top level + all children) have consistent offsets.
     // Otherwise, the sanitized children may have offsets that are different from the others and
     // also different from the parent column, causing data corruption.
-    return cudf::detail::purge_nonempty_nulls(input_view, stream, mr);
+    return cudf::detail::purge_nonempty_nulls(
+      input_view, stream, cudf::memory_resources{mr, mr});
   }
   nvtxRangePop();
 
@@ -526,9 +528,10 @@ std::vector<std::unique_ptr<column>> superimpose_and_sanitize_nulls(
   std::vector<std::unique_ptr<column>> purged_columns;
   for (auto& input : inputs) {
     auto const input_view = input->view();
-    auto const nullbool   = cudf::detail::has_nonempty_nulls(input_view, stream);
+    auto const nullbool = cudf::detail::has_nonempty_nulls(input_view, stream, mr);
     if (nullbool) {
-      purged_columns.emplace_back(cudf::detail::purge_nonempty_nulls(input_view, stream, mr));
+      purged_columns.emplace_back(cudf::detail::purge_nonempty_nulls(
+        input_view, stream, cudf::memory_resources{mr, mr}));
     } else {
       purged_columns.emplace_back(std::move(input));
     }
@@ -618,10 +621,17 @@ std::pair<column_view, temporary_nullable_data> push_down_nulls(column_view cons
                                                                 cuda::stream_ref stream,
                                                                 rmm::device_async_resource_ref mr)
 {
+  return push_down_nulls(input, stream, cudf::memory_resources{mr});
+}
+
+std::pair<column_view, temporary_nullable_data> push_down_nulls(column_view const& input,
+                                                                cuda::stream_ref stream,
+                                                                cudf::memory_resources mr)
+{
   auto output = push_down_nulls_no_sanitize(input, stream, mr);
 
   if (auto const output_view = output.first;
-      cudf::detail::has_nonempty_nulls(output_view, stream)) {
+      cudf::detail::has_nonempty_nulls(output_view, stream, mr.get_temporary_mr())) {
     output.second.new_columns.emplace_back(
       cudf::detail::purge_nonempty_nulls(output_view, stream, mr));
     output.first = output.second.new_columns.back()->view();
@@ -638,6 +648,13 @@ std::pair<column_view, temporary_nullable_data> push_down_nulls(column_view cons
 std::pair<table_view, temporary_nullable_data> push_down_nulls(table_view const& table,
                                                                cuda::stream_ref stream,
                                                                rmm::device_async_resource_ref mr)
+{
+  return push_down_nulls(table, stream, cudf::memory_resources{mr});
+}
+
+std::pair<table_view, temporary_nullable_data> push_down_nulls(table_view const& table,
+                                                               cuda::stream_ref stream,
+                                                               cudf::memory_resources mr)
 {
   auto processed_columns = std::vector<column_view>{};
   auto nullable_data     = temporary_nullable_data{};

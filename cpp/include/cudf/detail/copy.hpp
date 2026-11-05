@@ -251,6 +251,18 @@ std::unique_ptr<scalar> get_element(column_view const& input,
 bool has_nonempty_nulls(column_view const& input, cuda::stream_ref stream);
 
 /**
+ * @brief Checks for nonempty null rows using the supplied temporary resource.
+ *
+ * @param input Column to inspect
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param temp_mr Device memory resource used for intermediate allocations
+ * @return true if the column or one of its children contains a nonempty null row
+ */
+bool has_nonempty_nulls(column_view const& input,
+                        cuda::stream_ref stream,
+                        rmm::device_async_resource_ref temp_mr);
+
+/**
  * @copydoc cudf::may_have_nonempty_nulls
  *
  * @param stream CUDA stream used for device memory operations and kernel launches.
@@ -265,6 +277,18 @@ bool may_have_nonempty_nulls(column_view const& input, cuda::stream_ref stream);
 std::unique_ptr<column> purge_nonempty_nulls(column_view const& input,
                                              cuda::stream_ref stream,
                                              rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Purges nonempty null rows using distinct output and temporary resources.
+ *
+ * @param input Column to sanitize
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Resources used for the returned column and intermediate allocations
+ * @return Sanitized column
+ */
+std::unique_ptr<column> purge_nonempty_nulls(column_view const& input,
+                                             cuda::stream_ref stream,
+                                             cudf::memory_resources mr);
 
 }  // namespace detail
 }  // namespace CUDF_EXPORT cudf

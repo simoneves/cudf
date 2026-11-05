@@ -37,4 +37,11 @@ std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_gro
   return do_finalize(stream, mr);
 }
 
+std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_groupby::finalize(
+  cuda::stream_ref stream, cudf::memory_resources mr) const
+{
+  CUDF_FUNC_RANGE();
+  return do_finalize(stream, mr);
+}
+
 }  // namespace cudf::groupby

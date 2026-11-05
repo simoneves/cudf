@@ -116,4 +116,11 @@ void finalize_output(table_view const& values,
                      cudf::detail::result_cache* cache,
                      cuda::stream_ref stream);
 
+void finalize_output(table_view const& values,
+                     std::vector<std::unique_ptr<aggregation>> const& aggregations,
+                     std::unique_ptr<table>& agg_results,
+                     cudf::detail::result_cache* cache,
+                     cuda::stream_ref stream,
+                     rmm::device_async_resource_ref temporary_mr);
+
 }  // namespace cudf::groupby::detail::hash

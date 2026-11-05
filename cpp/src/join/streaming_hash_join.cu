@@ -380,11 +380,14 @@ class streaming_hash_join_impl {
                  cudf::data_type_error);
     auto const keys = right_partition.select(right_key_indices);
 
-    auto preprocessed = row::equality::preprocessed_table::create(keys, stream, mr.get_output_mr());
+    auto preprocessed = row::equality::preprocessed_table::create(keys, stream, mr);
     auto const batch_rows = keys.num_rows();
     auto row_bitmask      = [&]() -> std::optional<rmm::device_buffer> {
       if (batch_rows > 0 && compare_nulls == null_equality::UNEQUAL && nullable(keys)) {
-        return cudf::detail::bitmask_and(keys, stream, mr.get_temporary_mr()).first;
+        auto const temp_mr = mr.get_temporary_mr();
+        return cudf::detail::bitmask_and(
+                 keys, stream, cudf::memory_resources{temp_mr, temp_mr})
+          .first;
       }
       return std::nullopt;
     }();
@@ -445,8 +448,9 @@ class streaming_hash_join_impl {
   {
     static_assert(!(has_nested && use_primitive),
                   "primitive row comparators are never used for nested keys");
-    auto preprocessed_left =
-      row::equality::preprocessed_table::create(left, stream, resources.get_temporary_mr());
+    auto const temp_mr = resources.get_temporary_mr();
+    auto preprocessed_left = row::equality::preprocessed_table::create(
+      left, stream, cudf::memory_resources{temp_mr, temp_mr});
     auto const num_batches = inserted_batches.load(std::memory_order_relaxed);
     auto const right_comparators =
       std::span{preprocessed_right}.first(static_cast<std::size_t>(num_batches));

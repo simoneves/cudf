@@ -217,13 +217,13 @@ OutputType transform_reduce(InputIterator begin,
                             TransformationOp transform_op,
                             OutputType init,
                             ReductionOp reduce_op,
-                            cuda::stream_ref stream)
+                            cuda::stream_ref stream,
+                            rmm::device_async_resource_ref mr)
 {
   auto const num_items = cuda::std::distance(begin, end);
 
   // Device scalar to store the result
-  auto result =
-    cudf::detail::device_scalar<OutputType>(stream, cudf::get_current_device_resource_ref());
+  auto result = cudf::detail::device_scalar<OutputType>(stream, mr);
 
   size_t temp_storage_bytes = 0;
   CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(nullptr,
@@ -236,8 +236,7 @@ OutputType transform_reduce(InputIterator begin,
                                                    init,
                                                    stream.get()));
 
-  rmm::device_buffer d_temp_storage(
-    temp_storage_bytes, stream, cudf::get_current_device_resource_ref());
+  rmm::device_buffer d_temp_storage(temp_storage_bytes, stream, mr);
   CUDF_CUDA_TRY(cub::DeviceReduce::TransformReduce(d_temp_storage.data(),
                                                    temp_storage_bytes,
                                                    begin,
@@ -250,6 +249,26 @@ OutputType transform_reduce(InputIterator begin,
 
   // Copy result back to host via pinned memory
   return result.value(stream);
+}
+
+template <typename TransformationOp,
+          typename ReductionOp,
+          typename InputIterator,
+          typename OutputType = cuda::std::iter_value_t<InputIterator>>
+OutputType transform_reduce(InputIterator begin,
+                            InputIterator end,
+                            TransformationOp transform_op,
+                            OutputType init,
+                            ReductionOp reduce_op,
+                            cuda::stream_ref stream)
+{
+  return transform_reduce(begin,
+                          end,
+                          transform_op,
+                          init,
+                          reduce_op,
+                          stream,
+                          cudf::get_current_device_resource_ref());
 }
 
 /**
@@ -335,7 +354,8 @@ template <typename Predicate, typename InputIterator>
 cuda::std::size_t count_if(InputIterator begin,
                            InputIterator end,
                            Predicate predicate,
-                           cuda::stream_ref stream)
+                           cuda::stream_ref stream,
+                           rmm::device_async_resource_ref mr)
 {
   // Transform each element to 0 or 1 based on predicate, then sum
   auto transform_op = [predicate] __device__(auto const& val) -> cuda::std::size_t {
@@ -343,7 +363,17 @@ cuda::std::size_t count_if(InputIterator begin,
   };
 
   return transform_reduce(
-    begin, end, transform_op, cuda::std::size_t{0}, cuda::std::plus<>{}, stream);
+    begin, end, transform_op, cuda::std::size_t{0}, cuda::std::plus<>{}, stream, mr);
+}
+
+template <typename Predicate, typename InputIterator>
+cuda::std::size_t count_if(InputIterator begin,
+                           InputIterator end,
+                           Predicate predicate,
+                           cuda::stream_ref stream)
+{
+  return count_if(
+    begin, end, predicate, stream, cudf::get_current_device_resource_ref());
 }
 
 }  // namespace cudf::detail

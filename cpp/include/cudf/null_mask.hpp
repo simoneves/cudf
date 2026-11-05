@@ -348,6 +348,23 @@ std::vector<size_type> batch_null_count(host_span<bitmask_type const* const> bit
                                         cuda::stream_ref stream = cudf::get_default_stream());
 
 /**
+ * @brief Given a list of validity bitmasks, counts the number of null elements using an explicit
+ * temporary memory resource.
+ *
+ * @param bitmasks Validity bitmasks residing in device memory
+ * @param start Index of the first bit to count (inclusive)
+ * @param stop Index of the last bit to count (exclusive)
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Device memory resource used for temporary device allocations
+ * @return A vector of null counts for each bitmask
+ */
+std::vector<size_type> batch_null_count(host_span<bitmask_type const* const> bitmasks,
+                                        size_type start,
+                                        size_type stop,
+                                        cuda::stream_ref stream,
+                                        rmm::device_async_resource_ref mr);
+
+/**
  * @brief Given a validity bitmask, counts the number of valid elements (set
  * bits) in every range `[indices[2*i], indices[(2*i)+1])` (where 0 <= i <
  * indices.size() / 2).

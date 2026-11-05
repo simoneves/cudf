@@ -190,6 +190,23 @@ std::pair<rmm::device_buffer, size_type> bitmask_and(host_span<bitmask_type cons
                                                      rmm::device_async_resource_ref mr);
 
 /**
+ * @brief Performs bitwise AND of the provided masks using distinct output and temporary resources.
+ *
+ * @param masks Each mask to combine
+ * @param masks_begin_bits Bit offset at which to begin reading each mask
+ * @param mask_size_bits Number of bits to combine
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Resources used for the returned mask and intermediate allocations
+ * @return A pair containing the resulting mask and its count of unset bits
+ */
+std::pair<rmm::device_buffer, size_type> bitmask_and(
+  host_span<bitmask_type const* const> masks,
+  host_span<size_type const> masks_begin_bits,
+  size_type mask_size_bits,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr);
+
+/**
  * @copydoc cudf::bitmask_and
  *
  * @param[in] stream CUDA stream used for device memory operations and kernel launches.
@@ -197,6 +214,18 @@ std::pair<rmm::device_buffer, size_type> bitmask_and(host_span<bitmask_type cons
 std::pair<rmm::device_buffer, size_type> bitmask_and(table_view const& view,
                                                      cuda::stream_ref stream,
                                                      rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Performs bitwise AND of a table's null masks using distinct output and temporary resources.
+ *
+ * @param view Table whose column masks are combined
+ * @param stream CUDA stream used for device memory operations and kernel launches
+ * @param mr Resources used for the returned mask and intermediate allocations
+ * @return A pair containing the resulting mask and its count of unset bits
+ */
+std::pair<rmm::device_buffer, size_type> bitmask_and(table_view const& view,
+                                                     cuda::stream_ref stream,
+                                                     cudf::memory_resources mr);
 
 /**
  * @copydoc cudf::segmented_bitmask_and

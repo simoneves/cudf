@@ -66,6 +66,10 @@ std::pair<rmm::device_buffer, bitmask_type const*> compute_row_bitmask(table_vie
 std::pair<rmm::device_buffer, bitmask_type const*> compute_row_bitmask(
   table_view const& keys, cuda::stream_ref stream, rmm::device_async_resource_ref mr);
 
+/// Explicit output/temporary-resource counterpart used by stateful operators.
+std::pair<rmm::device_buffer, bitmask_type const*> compute_row_bitmask(
+  table_view const& keys, cuda::stream_ref stream, cudf::memory_resources mr);
+
 /// Whether the given aggregation kind is supported by hash-based groupby.
 constexpr bool is_hash_aggregation(aggregation::Kind k)
 {

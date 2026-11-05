@@ -201,6 +201,21 @@ void finalize_output(table_view const& values,
                      cudf::detail::result_cache* cache,
                      cuda::stream_ref stream)
 {
+  finalize_output(values,
+                  aggregations,
+                  agg_results,
+                  cache,
+                  stream,
+                  cudf::get_current_device_resource_ref());
+}
+
+void finalize_output(table_view const& values,
+                     std::vector<std::unique_ptr<aggregation>> const& aggregations,
+                     std::unique_ptr<table>& agg_results,
+                     cudf::detail::result_cache* cache,
+                     cuda::stream_ref stream,
+                     rmm::device_async_resource_ref temporary_mr)
+{
   auto result_cols       = agg_results->release();
   auto const null_counts = [&]() -> std::vector<size_type> {
     auto const has_null_masks = std::any_of(
@@ -212,7 +227,8 @@ void finalize_output(table_view const& values,
     std::ranges::transform(result_cols, null_masks.begin(), [](auto const& result) {
       return result->view().null_mask();
     });
-    return cudf::batch_null_count(null_masks, 0, result_cols.front()->size(), stream);
+    return cudf::batch_null_count(
+      null_masks, 0, result_cols.front()->size(), stream, temporary_mr);
   }();
 
   for (size_t i = 0; i < aggregations.size(); i++) {

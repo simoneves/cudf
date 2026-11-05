@@ -62,12 +62,14 @@ struct chars_size_transform {
   }
 };
 
-auto create_strings_device_views(host_span<column_view const> views, cuda::stream_ref stream)
+auto create_strings_device_views(host_span<column_view const> views,
+                                 cuda::stream_ref stream,
+                                 rmm::device_async_resource_ref mr)
 {
   CUDF_FUNC_RANGE();
   // Assemble contiguous array of device views
   auto [device_view_owners, device_views_ptr] =
-    create_column_device_views<column_device_view>(views, stream);
+    create_column_device_views<column_device_view>(views, stream, mr);
 
   // Compute the partition offsets and size of offset column
   // Note: Using 64-bit size_t so we can detect overflow of 32-bit size_type
@@ -78,17 +80,16 @@ auto create_strings_device_views(host_span<column_view const> views, cuda::strea
       return static_cast<size_t>(col.size());
     });
   thrust::inclusive_scan(thrust::host, offset_it, input_offsets.end(), offset_it);
-  auto d_input_offsets = cudf::detail::make_device_uvector_async(
-    input_offsets, stream, cudf::get_current_device_resource_ref());
+  auto d_input_offsets = cudf::detail::make_device_uvector_async(input_offsets, stream, mr);
   auto const output_size = input_offsets.back();
 
   // Compute the partition offsets and size of chars column
   // Note: Using 64-bit size_t so we can detect overflow of 32-bit size_type
-  auto d_partition_offsets = rmm::device_uvector<size_t>(views.size() + 1, stream);
+  auto d_partition_offsets = rmm::device_uvector<size_t>(views.size() + 1, stream, mr);
   d_partition_offsets.set_element_to_zero_async(0, stream);  // zero first element
 
   thrust::transform_inclusive_scan(
-    rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
+    rmm::exec_policy_nosync(stream, mr),
     device_views_ptr,
     device_views_ptr + views.size(),
     std::next(d_partition_offsets.begin()),
@@ -201,7 +202,7 @@ std::unique_ptr<column> concatenate(host_span<column_view const> columns,
 {
   CUDF_FUNC_RANGE();
   // Compute output sizes
-  auto const device_views         = create_strings_device_views(columns, stream);
+  auto const device_views         = create_strings_device_views(columns, stream, mr);
   auto const& d_views             = std::get<1>(device_views);
   auto const& d_input_offsets     = std::get<2>(device_views);
   auto const& d_partition_offsets = std::get<3>(device_views);
@@ -235,8 +236,7 @@ std::unique_ptr<column> concatenate(host_span<column_view const> columns,
   }
 
   {  // Copy offsets columns with single kernel launch
-    cudf::detail::device_scalar<size_type> d_valid_count(
-      0, stream, cudf::get_current_device_resource_ref());
+    cudf::detail::device_scalar<size_type> d_valid_count(0, stream, mr);
 
     constexpr size_type block_size{256};
     cudf::detail::grid_1d config(offsets_count, block_size);
