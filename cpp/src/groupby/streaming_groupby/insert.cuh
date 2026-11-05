@@ -110,7 +110,7 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
                                           out_of_bounds_policy::DONT_CHECK,
                                           cudf::negative_index_policy::NOT_ALLOWED,
                                           stream,
-                                          temp_mr);
+                                          cudf::memory_resources{temp_mr, temp_mr});
 
     auto preprocessed_compacted =
       cudf::detail::row::hash::preprocessed_table::create(compacted->view(), stream, temp_mr);
