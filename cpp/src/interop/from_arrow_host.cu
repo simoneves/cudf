@@ -127,7 +127,8 @@ std::pair<std::unique_ptr<cuda::device_buffer<std::byte>>, size_type> get_mask_b
   // Arrow supplies packed bytes; cuDF reads whole words and may copy padded masks.
   CUDF_CUDA_TRY(
     cudaMemsetAsync(mask.data(), 0, source_words * sizeof(bitmask_type), stream.get()));
-  CUDF_CUDA_TRY(cudf::detail::memcpy_async(mask.data(), bitmap + offset_index, copy_size, stream));
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+    mask.data(), bitmap + offset_index, copy_size, cudaMemcpyHostToDevice, stream.get()));
 
   if (mask_words > 0 && bit_index > 0) {
     auto dest_mask = cuda::device_buffer<bitmask_type>(stream, mr, padded_words, cuda::no_init);
@@ -180,10 +181,12 @@ struct dispatch_copy_from_arrow_host {
 
     auto col = make_fixed_width_column(type, num_rows, mask_state::UNALLOCATED, stream, mr);
     auto mutable_column_view = col->mutable_view();
-    CUDF_CUDA_TRY(cudf::detail::memcpy_async(mutable_column_view.data<DeviceType>(),
-                                             data_buffer + input->offset,
-                                             sizeof(DeviceType) * num_rows,
-                                             stream));
+    if (num_rows > 0) {
+      CUDF_CUDA_TRY(cudaMemcpyAsync(mutable_column_view.data<DeviceType>(),
+                                   data_buffer + input->offset,
+                                   sizeof(DeviceType) * num_rows,
+                                   cudaMemcpyHostToDevice, stream.get()));
+    }
 
     if (!skip_mask) {
       auto [mask, null_count] = get_mask_buffer(input, stream, mr);
@@ -219,8 +222,10 @@ std::unique_ptr<column> dispatch_copy_from_arrow_host::operator()<bool>(ArrowSch
     CUDF_CUDA_TRY(
       cudaMemsetAsync(data.data(), 0, source_words * sizeof(bitmask_type), stream.get()));
   }
-  CUDF_CUDA_TRY(
-    cudf::detail::memcpy_async(data.data(), data_buffer + offset_index, copy_size, stream));
+  if (copy_size > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(data.data(), data_buffer + offset_index, copy_size,
+                                  cudaMemcpyHostToDevice, stream.get()));
+  }
 
   if (data_words > 0 && bit_index > 0) {
     auto dest_data = cuda::device_buffer<bitmask_type>(
