@@ -7,6 +7,7 @@
 #include <cudf/detail/null_mask.cuh>
 #include <cudf/detail/null_mask.hpp>
 #include <cudf/detail/nvtx/ranges.hpp>
+#include <cudf/detail/utilities/cuda_memcpy.hpp>
 #include <cudf/detail/utilities/grid_1d.cuh>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
@@ -367,15 +368,20 @@ cuda::device_buffer<std::byte> copy_bitmask(bitmask_type const* mask,
   auto dest_mask = cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr);
   auto num_bytes = bitmask_allocation_size_bytes(end_bit - begin_bit);
   if ((mask == nullptr) || (num_bytes == 0)) { return dest_mask; }
+  auto number_of_mask_words = num_bitmask_words(end_bit - begin_bit);
+  auto const active_bytes   = static_cast<size_t>(number_of_mask_words) * sizeof(bitmask_type);
+  dest_mask =
+    cudf::create_null_mask(end_bit - begin_bit, cudf::mask_state::UNINITIALIZED, stream, mr);
+  // Producers initialize logical mask words, not arbitrary allocation padding.
+  if (num_bytes > active_bytes) {
+    CUDF_CUDA_TRY(cudaMemsetAsync(reinterpret_cast<char*>(dest_mask.data()) + active_bytes,
+                                  0,
+                                  num_bytes - active_bytes,
+                                  stream.get()));
+  }
   if (begin_bit == 0) {
-    auto const data = reinterpret_cast<uint8_t const*>(mask);
-    auto env        = cuda::std::execution::prop{cuda::allocation_alignment, alignof(bitmask_type)};
-    dest_mask =
-      cuda::device_buffer<std::byte>{stream, mr.get_output_mr(), data, data + num_bytes, env};
+    CUDF_CUDA_TRY(detail::memcpy_async(dest_mask.data(), mask, active_bytes, stream));
   } else {
-    auto number_of_mask_words = num_bitmask_words(end_bit - begin_bit);
-    dest_mask =
-      cudf::create_null_mask(end_bit - begin_bit, cudf::mask_state::UNINITIALIZED, stream, mr);
     cudf::detail::grid_1d config(number_of_mask_words, 256);
     copy_offset_bitmask<<<config.num_blocks, config.num_threads_per_block, 0, stream.get()>>>(
       reinterpret_cast<bitmask_type*>(dest_mask.data()),
