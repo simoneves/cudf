@@ -29,6 +29,13 @@ std::unique_ptr<column> sorted_order(table_view const& input,
                                      cuda::stream_ref stream,
                                      rmm::device_async_resource_ref mr);
 
+std::unique_ptr<column> sorted_order_with_resources(
+  table_view const& input,
+  std::vector<order> const& column_order,
+  std::vector<null_order> const& null_precedence,
+  cuda::stream_ref stream,
+  cudf::memory_resources mr);
+
 /**
  * @copydoc cudf::stable_sorted_order
  *

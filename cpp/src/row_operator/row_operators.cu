@@ -716,6 +716,39 @@ std::shared_ptr<preprocessed_table> preprocessed_table::create(
                 stream);
 }
 
+std::shared_ptr<preprocessed_table> preprocessed_table::create_with_resource(
+  table_view const& input,
+  host_span<order const> column_order,
+  host_span<null_order const> null_precedence,
+  cuda::stream_ref stream,
+  rmm::device_async_resource_ref mr)
+{
+  CUDF_EXPECTS(!detail::has_nested_columns(input),
+               "explicit-resource sorted_order does not accept nested columns");
+  check_lex_compatibility(input);
+  CUDF_EXPECTS(column_order.empty() || column_order.size() == static_cast<std::size_t>(input.num_columns()),
+               "Mismatch between number of columns and column order.");
+  CUDF_EXPECTS(null_precedence.empty() ||
+                 null_precedence.size() == static_cast<std::size_t>(input.num_columns()),
+               "Mismatch between number of columns and null precedence.");
+
+  auto d_table           = table_device_view::create(input, stream, mr);
+  auto d_column_order    = detail::make_device_uvector_async(column_order, stream, mr);
+  auto d_null_precedence = detail::make_device_uvector_async(null_precedence, stream, mr);
+  auto d_depths = rmm::device_uvector<size_type>(static_cast<std::size_t>(input.num_columns()),
+                                                 stream,
+                                                 mr);
+  CUDF_CUDA_TRY(cudaMemsetAsync(
+    d_depths.data(), 0, d_depths.size() * sizeof(size_type), stream.get()));
+  cudf::detail::sync_stream(stream);
+  return std::shared_ptr<preprocessed_table>(new preprocessed_table(std::move(d_table),
+                                                                    std::move(d_column_order),
+                                                                    std::move(d_null_precedence),
+                                                                    std::move(d_depths),
+                                                                    {},
+                                                                    false));
+}
+
 std::pair<std::shared_ptr<preprocessed_table>, std::shared_ptr<preprocessed_table>>
 preprocessed_table::create(table_view const& lhs,
                            table_view const& rhs,
