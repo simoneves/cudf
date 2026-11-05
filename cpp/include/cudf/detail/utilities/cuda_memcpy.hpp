@@ -81,12 +81,13 @@ template <typename T>
 void cuda_memcpy_async(device_span<T> dst, host_span<T const> src, cuda::stream_ref stream)
 {
   CUDF_EXPECTS(dst.size() == src.size(), "Mismatched sizes in cuda_memcpy_async");
-  auto const is_pinned = src.is_device_accessible();
-  cuda_memcpy_async_impl(dst.data(),
-                         src.data(),
-                         src.size_bytes(),
-                         is_pinned ? host_memory_kind::PINNED : host_memory_kind::PAGEABLE,
-                         stream);
+  // The typed span declares a host source, including on unified-memory systems.
+  // Preserve that role explicitly; pointer-based inference can select a device
+  // read of host data whose CPU initialization is invisible to device checking.
+  if (src.size_bytes() > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(dst.data(), src.data(), src.size_bytes(),
+                                  cudaMemcpyHostToDevice, stream.get()));
+  }
 }
 
 /**
