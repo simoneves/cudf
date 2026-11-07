@@ -239,10 +239,10 @@ CUDF_KERNEL void fused_concatenate_kernel(column_device_view const* input_views,
     auto const offset_index   = output_index - *offset_it;
     auto const& input_view    = input_views[partition_index];
     auto const* input_data    = input_view.data<T>();
-    output_data[output_index] = input_data[offset_index];
+    bool const bit_is_set    = !Nullable || input_view.is_valid(offset_index);
+    output_data[output_index] = bit_is_set ? input_data[offset_index] : T{};
 
     if (Nullable) {
-      bool const bit_is_set       = input_view.is_valid(offset_index);
       bitmask_type const new_word = __ballot_sync(active_mask, bit_is_set);
 
       // First thread writes bitmask word
