@@ -104,6 +104,20 @@ struct ops_wrapper {
   __device__ void operator()(size_type i)
   {
     if constexpr (cuda::std::is_invocable_v<BinaryOperator, TypeCommon, TypeCommon>) {
+      auto const write = [&](auto result) {
+        if constexpr (is_bool_result<BinaryOperator, TypeCommon, TypeCommon>())
+          out.element<decltype(result)>(i) = result;
+        else
+          type_dispatcher(out.type(), typed_casted_writer<decltype(result)>{}, i, out, result);
+      };
+      if constexpr (cuda::std::is_same_v<BinaryOperator, ops::LogicalAnd>) {
+        // A NULL output row's operands may be unspecified. Write a defined
+        // value without reading them.
+        if (!out.is_valid(i)) {
+          write(cuda::std::invoke_result_t<BinaryOperator, TypeCommon, TypeCommon>{});
+          return;
+        }
+      }
       TypeCommon x =
         type_dispatcher(lhs.type(), type_casted_accessor<TypeCommon>{}, i, lhs, is_lhs_scalar);
       TypeCommon y =
@@ -130,10 +144,7 @@ struct ops_wrapper {
         // To suppress nvcc warning
         return cuda::std::invoke_result_t<BinaryOperator, TypeCommon, TypeCommon>{};
       }();
-      if constexpr (is_bool_result<BinaryOperator, TypeCommon, TypeCommon>())
-        out.element<decltype(result)>(i) = result;
-      else
-        type_dispatcher(out.type(), typed_casted_writer<decltype(result)>{}, i, out, result);
+      write(result);
     }
     (void)i;
   }
@@ -156,6 +167,20 @@ struct ops2_wrapper {
   {
     if constexpr (!has_common_type_v<TypeLhs, TypeRhs> and
                   cuda::std::is_invocable_v<BinaryOperator, TypeLhs, TypeRhs>) {
+      auto const write = [&](auto result) {
+        if constexpr (is_bool_result<BinaryOperator, TypeLhs, TypeRhs>())
+          out.element<decltype(result)>(i) = result;
+        else
+          type_dispatcher(out.type(), typed_casted_writer<decltype(result)>{}, i, out, result);
+      };
+      if constexpr (cuda::std::is_same_v<BinaryOperator, ops::LogicalAnd>) {
+        // A NULL output row's operands may be unspecified. Write a defined
+        // value without reading them.
+        if (!out.is_valid(i)) {
+          write(cuda::std::invoke_result_t<BinaryOperator, TypeLhs, TypeRhs>{});
+          return;
+        }
+      }
       TypeLhs x   = lhs.element<TypeLhs>(is_lhs_scalar ? 0 : i);
       TypeRhs y   = rhs.element<TypeRhs>(is_rhs_scalar ? 0 : i);
       auto result = [&]() {
@@ -180,10 +205,7 @@ struct ops2_wrapper {
         // To suppress nvcc warning
         return cuda::std::invoke_result_t<BinaryOperator, TypeLhs, TypeRhs>{};
       }();
-      if constexpr (is_bool_result<BinaryOperator, TypeLhs, TypeRhs>())
-        out.element<decltype(result)>(i) = result;
-      else
-        type_dispatcher(out.type(), typed_casted_writer<decltype(result)>{}, i, out, result);
+      write(result);
     }
     (void)i;
   }
