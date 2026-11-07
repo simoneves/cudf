@@ -104,6 +104,9 @@ struct ops_wrapper {
   __device__ void operator()(size_type i)
   {
     if constexpr (cuda::std::is_invocable_v<BinaryOperator, TypeCommon, TypeCommon>) {
+      if constexpr (cuda::std::is_same_v<BinaryOperator, ops::LogicalAnd>) {
+        if (!out.is_valid(i)) return;
+      }
       TypeCommon x =
         type_dispatcher(lhs.type(), type_casted_accessor<TypeCommon>{}, i, lhs, is_lhs_scalar);
       TypeCommon y =
@@ -156,6 +159,9 @@ struct ops2_wrapper {
   {
     if constexpr (!has_common_type_v<TypeLhs, TypeRhs> and
                   cuda::std::is_invocable_v<BinaryOperator, TypeLhs, TypeRhs>) {
+      if constexpr (cuda::std::is_same_v<BinaryOperator, ops::LogicalAnd>) {
+        if (!out.is_valid(i)) return;
+      }
       TypeLhs x   = lhs.element<TypeLhs>(is_lhs_scalar ? 0 : i);
       TypeRhs y   = rhs.element<TypeRhs>(is_rhs_scalar ? 0 : i);
       auto result = [&]() {
