@@ -189,9 +189,16 @@ std::unique_ptr<cudf::column> replace_nulls_column_kernel_forwarder::operator()<
 
 template <typename T>
 struct replace_nulls_functor {
+  T const* input_it;
   T const* value_it;
-  replace_nulls_functor(T const* _value_it) : value_it(_value_it) {}
-  __device__ T operator()(T input, bool is_valid) { return is_valid ? input : *value_it; }
+  replace_nulls_functor(T const* input, T const* replacement)
+    : input_it(input), value_it(replacement)
+  {
+  }
+  __device__ T operator()(cudf::size_type row, bool is_valid)
+  {
+    return is_valid ? input_it[row] : *value_it;
+  }
 };
 
 /**
@@ -215,10 +222,11 @@ struct replace_nulls_scalar_kernel_forwarder {
     auto& s1         = static_cast<ScalarType const&>(replacement);
     auto device_in   = cudf::column_device_view::create(input, stream);
 
-    auto func = replace_nulls_functor<col_type>{s1.data()};
+    auto func = replace_nulls_functor<col_type>{input.data<col_type>(), s1.data()};
+    auto first = cuda::make_counting_iterator(cudf::size_type{0});
     thrust::transform(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
-                      input.data<col_type>(),
-                      input.data<col_type>() + input.size(),
+                      first,
+                      first + input.size(),
                       cudf::detail::make_validity_iterator(*device_in),
                       output_view.data<col_type>(),
                       func);
